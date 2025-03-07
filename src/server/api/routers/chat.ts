@@ -2,6 +2,15 @@ import { z } from "zod";
 import { createTRPCRouter, publicProcedure } from "~/server/api/trpc";
 import { callLLM } from "~/utils/llm";
 import { searchWeb } from "~/utils/search";
+import {
+  createChat,
+  addMessageToChat,
+  addSearchResultsToMessage,
+  getAllChats,
+  getChatById,
+  updateChatTitle,
+  deleteChat,
+} from "~/server/db/chat-service";
 
 // Zod schema for LLM response validation
 const CitationSchema = z.object({
@@ -49,9 +58,71 @@ const ConversationMessageSchema = z.object({
 });
 
 export const chatRouter = createTRPCRouter({
+  // Get all chats
+  getChats: publicProcedure
+    .query(async () => {
+      const allChats = await getAllChats();
+      return allChats;
+    }),
+  
+  // Get a chat by ID
+  getChat: publicProcedure
+    .input(z.object({ id: z.string() }))
+    .query(async ({ input }) => {
+      const chat = await getChatById(input.id);
+      if (!chat) {
+        throw new Error(`Chat with ID ${input.id} not found`);
+      }
+      return chat;
+    }),
+  
+  // Create a new chat
+  createChat: publicProcedure
+    .input(z.object({ 
+      title: z.string(),
+      firstMessage: z.string(),
+    }))
+    .mutation(async ({ input }) => {
+      // Create a new chat with the first user message
+      const chatId = await createChat({
+        title: input.title,
+        messages: [
+          {
+            role: "user",
+            content: input.firstMessage,
+            orderIndex: 0,
+          }
+        ]
+      });
+      
+      // Now get the chat to return
+      return await getChatById(chatId);
+    }),
+  
+  // Update chat title
+  updateChatTitle: publicProcedure
+    .input(z.object({
+      chatId: z.string(),
+      title: z.string(),
+    }))
+    .mutation(async ({ input }) => {
+      await updateChatTitle(input.chatId, input.title);
+      return { success: true };
+    }),
+  
+  // Delete a chat
+  deleteChat: publicProcedure
+    .input(z.object({ chatId: z.string() }))
+    .mutation(async ({ input }) => {
+      await deleteChat(input.chatId);
+      return { success: true };
+    }),
+  
+  // Send a message in a chat
   sendMessage: publicProcedure
     .input(z.object({ 
       content: z.string(),
+      chatId: z.string(), // Now mandatory
       conversationHistory: z.array(ConversationMessageSchema).optional()
     }))
     .mutation(async ({ input }) => {
@@ -122,8 +193,43 @@ IMPORTANT: Your response MUST be a valid JSON object with an "answer" field cont
             const jsonResponse = JSON.parse(jsonContent);
             const validatedResponse = LLMResponseSchema.parse(jsonResponse);
             
+            // Save user message to database first
+            await addMessageToChat(input.chatId, {
+              role: "user",
+              content: input.content,
+            });
+              
+            // Then save assistant message with response and citations
+            const messageId = await addMessageToChat(input.chatId, {
+              role: "assistant",
+              content: validatedResponse.answer,
+              searchQuery,
+              citations: validatedResponse.citations,
+            });
+              
+            // Save raw search results
+            await addSearchResultsToMessage(
+              messageId,
+              searchQuery,
+              searchResults
+            );
+
+            // Update chat title if this is one of the first messages
+            const chat = await getChatById(input.chatId);
+            if (chat && chat.messages.length <= 3) {
+              // Generate a title based on the conversation
+              const titleGeneration = await callLLM(
+                `Generate a short, descriptive title (max 6 words) for a conversation that starts with this message: "${input.content}"`,
+                "You are a helpful assistant that generates concise, descriptive titles. Keep it under 6 words."
+              );
+              
+              // Update the chat title
+              await updateChatTitle(input.chatId, titleGeneration.trim().replace(/^"(.+)"$/, '$1'));
+            }
+              
             return {
               success: true,
+              chatId: input.chatId,
               response: validatedResponse.answer,
               citations: validatedResponse.citations,
               searchQuery,
@@ -145,8 +251,22 @@ IMPORTANT: Your response MUST be a valid JSON object with an "answer" field cont
             }
             
             // Fallback: Return the extracted answer without citations
+            // Save user message to database 
+            await addMessageToChat(input.chatId, {
+              role: "user",
+              content: input.content,
+            });
+
+            // Save assistant message with extracted answer
+            await addMessageToChat(input.chatId, {
+              role: "assistant",
+              content: extractedAnswer,
+              searchQuery,
+            });
+
             return {
               success: true,
+              chatId: input.chatId,
               response: extractedAnswer,
               citations: extractedCitations,
               searchQuery,
@@ -198,8 +318,21 @@ Please answer the user's question based on your training data.`;
             const jsonResponse = JSON.parse(jsonContent);
             const validatedResponse = LLMResponseSchema.parse(jsonResponse);
             
+            // Save user message to database 
+            await addMessageToChat(input.chatId, {
+              role: "user",
+              content: input.content,
+            });
+
+            // Save assistant message without search results
+            await addMessageToChat(input.chatId, {
+              role: "assistant",
+              content: validatedResponse.answer,
+            });
+
             return {
               success: true,
+              chatId: input.chatId,
               response: validatedResponse.answer,
               citations: [],
             };
@@ -219,8 +352,21 @@ Please answer the user's question based on your training data.`;
             }
             
             // Return the extracted answer without citations
+            // Save user message to database 
+            await addMessageToChat(input.chatId, {
+              role: "user",
+              content: input.content,
+            });
+
+            // Save assistant message with extracted answer
+            await addMessageToChat(input.chatId, {
+              role: "assistant",
+              content: extractedAnswer,
+            });
+
             return {
               success: true,
+              chatId: input.chatId,
               response: extractedAnswer,
               citations: [],
             };

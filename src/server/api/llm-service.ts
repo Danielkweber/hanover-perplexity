@@ -90,28 +90,9 @@ export async function shouldSearchForQuery(
   query: string,
   conversationHistory?: ConversationMessage[],
 ): Promise {
-  let contextPrompt = `User's question: "${query}"`;
-
-  // Add conversation context if available
-  if (conversationHistory && conversationHistory.length > 0) {
-    contextPrompt =
-      "Previous conversation:\n" +
-      conversationHistory
-        .map(
-          (msg) =>
-            `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`,
-        )
-        .join("\n\n") +
-      "\n\nUser's current question: \"" +
-      query +
-      '"';
-  }
-
-  // Ask Claude if this query needs a search
-  const decision = await callLLM(contextPrompt, SEARCH_DECISION_PROMPT);
-
-  // Parse the response (should be "true" or "false")
-  return decision.toLowerCase().includes("true");
+  // Always return true to ensure we always perform a web search for all queries
+  // This ensures we always get real citations from the web
+  return true;
 }
 
 /**
@@ -279,6 +260,7 @@ Please answer the user's question based on your training data.`;
 
     return {
       answer: validatedResponse.answer,
+      citations: validatedResponse.citations || []
     };
   } catch (parseError) {
     console.error("Error parsing fallback LLM response as JSON:", parseError);
@@ -296,6 +278,7 @@ Please answer the user's question based on your training data.`;
 
     return {
       answer: extractedAnswer,
+      citations: []
     };
   }
 }
@@ -357,8 +340,10 @@ export async function processUserMessage(
         conversationHistory,
       );
 
+      // Add empty citations array to be consistent
       return {
         answer: response.answer,
+        citations: []
       };
     }
   } catch (error) {
@@ -372,6 +357,7 @@ export async function processUserMessage(
 
     return {
       answer: response.answer,
+      citations: []
     };
   }
 }

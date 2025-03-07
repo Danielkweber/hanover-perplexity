@@ -3,10 +3,18 @@
 import { useState, useRef, useEffect } from "react";
 import { api } from "~/trpc/react";
 
+interface Citation {
+  title: string;
+  url: string;
+  relevance?: string;
+}
+
 interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
+  citations?: Citation[];
+  searchQuery?: string;
 }
 
 export default function ChatPage() {
@@ -41,7 +49,9 @@ export default function ChatPage() {
         { 
           id: `assistant-${Date.now()}`, 
           role: "assistant", 
-          content: data.response 
+          content: data.response,
+          citations: data.citations,
+          searchQuery: data.searchQuery,
         },
       ]);
       setIsLoading(false);
@@ -135,7 +145,41 @@ export default function ChatPage() {
                 <div className="font-medium mb-1">
                   {message.role === "user" ? "You" : "Claude"}
                 </div>
-                <p className="whitespace-pre-wrap">{message.content}</p>
+                
+                {/* Message content */}
+                <div className="whitespace-pre-wrap">{message.content}</div>
+                
+                {/* Citations section */}
+                {message.citations && message.citations.length > 0 && (
+                  <div className="mt-4 pt-3 border-t border-gray-200">
+                    <div className="text-sm font-medium text-gray-700 mb-2">Sources:</div>
+                    <div className="space-y-2">
+                      {message.citations.map((citation, i) => (
+                        <div key={i} className="text-sm">
+                          <a 
+                            href={citation.url} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:text-blue-800 hover:underline flex items-start"
+                          >
+                            <span className="mr-1">🔗</span>
+                            <span>{citation.title || citation.url}</span>
+                          </a>
+                          {citation.relevance && (
+                            <p className="text-gray-600 text-xs ml-5 mt-1">{citation.relevance}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {/* Search query info (optional, for debugging) */}
+                {message.searchQuery && (
+                  <div className="mt-2 text-xs text-gray-400">
+                    Search query: {message.searchQuery}
+                  </div>
+                )}
               </div>
             ))}
             {isLoading && (
@@ -147,7 +191,10 @@ export default function ChatPage() {
                     <div className="w-2 h-2 rounded-full bg-gray-400 animate-pulse delay-100"></div>
                     <div className="w-2 h-2 rounded-full bg-gray-400 animate-pulse delay-200"></div>
                   </div>
-                  <p className="text-sm text-gray-500">Searching the web for information...</p>
+                  <div className="space-y-2">
+                    <p className="text-sm text-gray-500">Searching the web for information...</p>
+                    <p className="text-xs text-gray-400">I'll find relevant sources and cite them in my response.</p>
+                  </div>
                 </div>
               </div>
             )}

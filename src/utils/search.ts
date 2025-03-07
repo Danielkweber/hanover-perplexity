@@ -10,10 +10,10 @@ function getExaClient(): Exa {
     if (!env.EXA_API_KEY) {
       throw new Error("EXA_API_KEY is not set in environment variables");
     }
-    
+
     exaClient = new Exa(env.EXA_API_KEY);
   }
-  
+
   return exaClient;
 }
 
@@ -30,22 +30,19 @@ export interface SearchResult {
  * @param numResults The number of results to return (default: 3)
  * @returns Array of search results with title, URL, and content
  */
-export async function searchWeb(query: string, numResults: number = 3): Promise<SearchResult[]> {
+export async function searchWeb(query: string, numResults = 5): Promise {
   try {
     const client = getExaClient();
-    
+
     // Perform the search and get contents
-    const results = await client.searchAndContents(
-      query,
-      {
-        numResults,
-        text: true,
-        highlights: true
-      }
-    );
-    
+    const results = await client.searchAndContents(query, {
+      numResults,
+      text: true,
+      highlights: true,
+    });
+
     // Format the results
-    return results.results.map(result => ({
+    return results.results.map((result) => ({
       title: result.title || "No title",
       url: result.url,
       content: result.text || result.highlight || "No content available",

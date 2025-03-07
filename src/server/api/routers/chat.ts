@@ -1,7 +1,5 @@
 import { z } from "zod";
 import { createTRPCRouter, publicProcedure } from "~/server/api/trpc";
-import { callLLM } from "~/utils/llm";
-import { searchWeb } from "~/utils/search";
 import {
   createChat,
   addMessageToChat,
@@ -11,45 +9,12 @@ import {
   updateChatTitle,
   deleteChat,
 } from "~/server/db/chat-service";
-
-// Zod schema for LLM response validation
-const CitationSchema = z.object({
-  title: z.string(),
-  url: z.string().url(),
-  relevance: z.string().optional(),
-});
-
-const LLMResponseSchema = z.object({
-  answer: z.string(),
-  citations: z.array(CitationSchema).min(0).max(5),
-});
-
-// System prompt for answering with search results in JSON format
-const SYSTEM_PROMPT = `You are Claude, an AI assistant with access to search results.
-
-When responding to the user, you MUST:
-1. Carefully review all the search results provided.
-2. Synthesize the information to create a comprehensive, informative answer.
-3. Return your response in the EXACT JSON format specified below.
-4. Include 2-3 relevant citations from the search results.
-5. If the search results don't contain relevant information, acknowledge this and provide your best response based on your training.
-6. Be helpful, accurate, and concise.
-
-YOUR RESPONSE MUST STRICTLY FOLLOW THIS JSON FORMAT:
-{
-  "answer": "Your comprehensive answer to the user's question",
-  "citations": [
-    {
-      "title": "Title of the source",
-      "url": "Full URL of the source",
-      "relevance": "Brief explanation of how this source supports your answer"
-    }
-  ]
-}
-
-The "citations" array must contain 2-3 of the most relevant sources that directly inform your answer.
-DO NOT include any text outside the JSON structure.
-DO NOT format the JSON with markdown code blocks.`;
+import {
+  processUserMessage,
+  generateChatTitle,
+  LLMResponseSchema,
+  CitationSchema
+} from "~/server/api/llm-service";
 
 // Type for conversation history messages
 const ConversationMessageSchema = z.object({
@@ -83,20 +48,79 @@ export const chatRouter = createTRPCRouter({
       firstMessage: z.string(),
     }))
     .mutation(async ({ input }) => {
-      // Create a new chat with the first user message
-      const chatId = await createChat({
-        title: input.title,
-        messages: [
-          {
-            role: "user",
-            content: input.firstMessage,
-            orderIndex: 0,
+      try {
+        // Create a new chat with the first user message
+        const chatId = await createChat({
+          title: input.title,
+          messages: [
+            {
+              role: "user",
+              content: input.firstMessage,
+              orderIndex: 0,
+            }
+          ]
+        });
+        
+        // Return the chat ID immediately, without waiting for the LLM processing
+        // This allows the frontend to redirect to the chat page right away
+        // The LLM processing will happen asynchronously in the background
+        
+        // Start the LLM processing in the background without awaiting it
+        (async () => {
+          try {
+            // Process the user message to get a response
+            const response = await processUserMessage(input.firstMessage);
+            
+            // Save assistant message with response and citations
+            const messageId = await addMessageToChat(chatId, {
+              role: "assistant",
+              content: response.answer,
+              searchQuery: response.searchQuery,
+              citations: response.citations,
+              orderIndex: 1
+            });
+            
+            // Save raw search results if they exist
+            if (response.searchQuery && response.searchResults) {
+              await addSearchResultsToMessage(
+                messageId,
+                response.searchQuery,
+                response.searchResults
+              );
+            }
+            
+            // Generate a title based on the conversation
+            const title = await generateChatTitle(input.firstMessage);
+            
+            // Update the chat title
+            await updateChatTitle(chatId, title);
+            
+          } catch (processingError) {
+            console.error("Error processing first message:", processingError);
+            
+            // Fallback to a simple answer without search
+            const fallbackResponse = {
+              answer: "I'm sorry, I couldn't process your question properly. Could you please try rephrasing it?"
+            };
+            
+            // Save assistant message with the fallback response
+            await addMessageToChat(chatId, {
+              role: "assistant",
+              content: fallbackResponse.answer,
+              orderIndex: 1
+            });
           }
-        ]
-      });
-      
-      // Now get the chat to return
-      return await getChatById(chatId);
+        })().catch(err => {
+          console.error("Background LLM processing error:", err);
+        });
+        
+        // Return the chat info right away, without waiting for LLM processing
+        const chat = await getChatById(chatId);
+        return chat;
+      } catch (error) {
+        console.error("Error in createChat:", error);
+        throw new Error("Failed to create chat");
+      }
     }),
   
   // Update chat title
@@ -127,254 +151,67 @@ export const chatRouter = createTRPCRouter({
     }))
     .mutation(async ({ input }) => {
       try {
-        try {
-          // First, use Claude to generate a good search query
-          const searchQueryGeneration = await callLLM(
-            `Generate a search query to find information about: "${input.content}". 
-             Return ONLY the search query text, nothing else.`,
-            "You are a helpful assistant that generates effective search queries. Keep your response brief and focused."
+        // Save user message to database first
+        await addMessageToChat(input.chatId, {
+          role: "user",
+          content: input.content,
+        });
+        
+        // Process the user message with conversation history
+        const response = await processUserMessage(input.content, input.conversationHistory);
+        
+        // Save assistant message with response and citations
+        const messageId = await addMessageToChat(input.chatId, {
+          role: "assistant",
+          content: response.answer,
+          searchQuery: response.searchQuery,
+          citations: response.citations,
+        });
+        
+        // Save raw search results if they exist
+        if (response.searchQuery && response.searchResults) {
+          await addSearchResultsToMessage(
+            messageId,
+            response.searchQuery,
+            response.searchResults
           );
-          
-          // Remove any extra quotes or formatting that Claude might add
-          const searchQuery = searchQueryGeneration
-            .replace(/^["']|["']$/g, '')  // Remove surrounding quotes
-            .replace(/^Search query: /i, '')  // Remove prefixes
-            .trim();
-          
-          // Perform the search
-          const searchResults = await searchWeb(searchQuery);
-          
-          // Format the search results for Claude
-          const formattedResults = searchResults.map((result, index) => {
-            return `[SEARCH RESULT ${index + 1}]
-Title: ${result.title}
-URL: ${result.url}
-Content: ${result.content.substring(0, 800)}${result.content.length > 800 ? '...' : ''}
-${result.publishedDate ? `Published: ${result.publishedDate}` : ''}`;
-          }).join('\n\n');
-          
-          // Format conversation history if available
-          let conversationContext = "";
-          if (input.conversationHistory && input.conversationHistory.length > 0) {
-            conversationContext = "Previous conversation:\n" + 
-              input.conversationHistory.map(msg => 
-                `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`
-              ).join("\n\n") + "\n\n";
-          }
-
-          // Prepare the full context for Claude
-          const prompt = `${conversationContext}User's current question: "${input.content}"
-
-Here are search results that may help answer this question:
-
-${formattedResults}
-
-Please answer the user's latest question based on these search results and the conversation history (if any).
-
-IMPORTANT: Your response MUST be a valid JSON object with an "answer" field containing your response and a "citations" array with 2-3 relevant sources. Follow the exact JSON format specified in your instructions.`;
-          
-          // Get response from Claude with the search results
-          const llmResponse = await callLLM(prompt, SYSTEM_PROMPT);
-          
-          try {
-            // Clean the response of any control characters and ensure it's valid JSON
-            const cleanedResponse = llmResponse
-              .replace(/[\u0000-\u0019]+/g, "") // Remove control characters
-              .replace(/\\n/g, " ")           // Replace escaped newlines with space
-              .replace(/\\"/g, '"')           // Handle escaped quotes properly
-              .trim();
-            
-            // Try to extract JSON if it's wrapped in markdown code blocks
-            const jsonMatch = cleanedResponse.match(/```(?:json)?([\s\S]*?)```/) || 
-                             [null, cleanedResponse];
-            const jsonContent = jsonMatch[1].trim();
-            
-            // Parse and validate the JSON response
-            const jsonResponse = JSON.parse(jsonContent);
-            const validatedResponse = LLMResponseSchema.parse(jsonResponse);
-            
-            // Save user message to database first
-            await addMessageToChat(input.chatId, {
-              role: "user",
-              content: input.content,
-            });
-              
-            // Then save assistant message with response and citations
-            const messageId = await addMessageToChat(input.chatId, {
-              role: "assistant",
-              content: validatedResponse.answer,
-              searchQuery,
-              citations: validatedResponse.citations,
-            });
-              
-            // Save raw search results
-            await addSearchResultsToMessage(
-              messageId,
-              searchQuery,
-              searchResults
-            );
-
-            // Update chat title if this is one of the first messages
-            const chat = await getChatById(input.chatId);
-            if (chat && chat.messages.length <= 3) {
-              // Generate a title based on the conversation
-              const titleGeneration = await callLLM(
-                `Generate a short, descriptive title (max 6 words) for a conversation that starts with this message: "${input.content}"`,
-                "You are a helpful assistant that generates concise, descriptive titles. Keep it under 6 words."
-              );
-              
-              // Update the chat title
-              await updateChatTitle(input.chatId, titleGeneration.trim().replace(/^"(.+)"$/, '$1'));
-            }
-              
-            return {
-              success: true,
-              chatId: input.chatId,
-              response: validatedResponse.answer,
-              citations: validatedResponse.citations,
-              searchQuery,
-            };
-          } catch (parseError) {
-            console.error("Error parsing LLM response as JSON:", parseError);
-            console.log("Raw LLM response:", llmResponse);
-            
-            // Try to extract a response even if JSON parsing failed
-            let extractedAnswer = llmResponse;
-            let extractedCitations = [];
-            
-            // Try to extract answer text if it looks like JSON but couldn't be parsed
-            const answerMatch = llmResponse.match(/"answer"\s*:\s*"([^"]*)"/);
-            if (answerMatch && answerMatch[1]) {
-              extractedAnswer = answerMatch[1]
-                .replace(/\\n/g, "\n")
-                .replace(/\\"/g, '"');
-            }
-            
-            // Fallback: Return the extracted answer without citations
-            // Save user message to database 
-            await addMessageToChat(input.chatId, {
-              role: "user",
-              content: input.content,
-            });
-
-            // Save assistant message with extracted answer
-            await addMessageToChat(input.chatId, {
-              role: "assistant",
-              content: extractedAnswer,
-              searchQuery,
-            });
-
-            return {
-              success: true,
-              chatId: input.chatId,
-              response: extractedAnswer,
-              citations: extractedCitations,
-              searchQuery,
-            };
-          }
-        } catch (searchError) {
-          console.error("Error during search:", searchError);
-          
-          // Format conversation history for fallback
-          let conversationContext = "";
-          if (input.conversationHistory && input.conversationHistory.length > 0) {
-            conversationContext = "Previous conversation:\n" + 
-              input.conversationHistory.map(msg => 
-                `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`
-              ).join("\n\n") + "\n\n";
-          }
-
-          // Fallback to regular response without search
-          const fallbackSystemPrompt = `You are Claude, an AI assistant. Web search is currently unavailable.
-          
-YOUR RESPONSE MUST STRICTLY FOLLOW THIS JSON FORMAT:
-{
-  "answer": "Your comprehensive answer to the user's question based on your training",
-  "citations": []
-}
-
-DO NOT include any text outside the JSON structure.`;
-
-          const fallbackPrompt = `${conversationContext}User's question: "${input.content}"
-          
-Please answer the user's question based on your training data.`;
-
-          const llmResponse = await callLLM(fallbackPrompt, fallbackSystemPrompt);
-          
-          try {
-            // Clean the response of any control characters and ensure it's valid JSON
-            const cleanedResponse = llmResponse
-              .replace(/[\u0000-\u0019]+/g, "") // Remove control characters
-              .replace(/\\n/g, " ")           // Replace escaped newlines with space
-              .replace(/\\"/g, '"')           // Handle escaped quotes properly
-              .trim();
-            
-            // Try to extract JSON if it's wrapped in markdown code blocks
-            const jsonMatch = cleanedResponse.match(/```(?:json)?([\s\S]*?)```/) || 
-                             [null, cleanedResponse];
-            const jsonContent = jsonMatch[1].trim();
-            
-            // Parse and validate the JSON response
-            const jsonResponse = JSON.parse(jsonContent);
-            const validatedResponse = LLMResponseSchema.parse(jsonResponse);
-            
-            // Save user message to database 
-            await addMessageToChat(input.chatId, {
-              role: "user",
-              content: input.content,
-            });
-
-            // Save assistant message without search results
-            await addMessageToChat(input.chatId, {
-              role: "assistant",
-              content: validatedResponse.answer,
-            });
-
-            return {
-              success: true,
-              chatId: input.chatId,
-              response: validatedResponse.answer,
-              citations: [],
-            };
-          } catch (parseError) {
-            console.error("Error parsing fallback LLM response as JSON:", parseError);
-            console.log("Raw fallback LLM response:", llmResponse);
-            
-            // Try to extract a response even if JSON parsing failed
-            let extractedAnswer = llmResponse;
-            
-            // Try to extract answer text if it looks like JSON but couldn't be parsed
-            const answerMatch = llmResponse.match(/"answer"\s*:\s*"([^"]*)"/);
-            if (answerMatch && answerMatch[1]) {
-              extractedAnswer = answerMatch[1]
-                .replace(/\\n/g, "\n")
-                .replace(/\\"/g, '"');
-            }
-            
-            // Return the extracted answer without citations
-            // Save user message to database 
-            await addMessageToChat(input.chatId, {
-              role: "user",
-              content: input.content,
-            });
-
-            // Save assistant message with extracted answer
-            await addMessageToChat(input.chatId, {
-              role: "assistant",
-              content: extractedAnswer,
-            });
-
-            return {
-              success: true,
-              chatId: input.chatId,
-              response: extractedAnswer,
-              citations: [],
-            };
-          }
         }
+        
+        // Update chat title if this is one of the first messages
+        const chat = await getChatById(input.chatId);
+        if (chat && chat.messages.length <= 3) {
+          const title = await generateChatTitle(input.content);
+          await updateChatTitle(input.chatId, title);
+        }
+        
+        return {
+          success: true,
+          chatId: input.chatId,
+          response: response.answer,
+          citations: response.citations || [],
+          searchQuery: response.searchQuery,
+        };
       } catch (error) {
         console.error("Error in sendMessage:", error);
-        throw new Error("Failed to send message to LLM");
+        
+        // Try to provide a fallback response even if processing failed
+        try {
+          // Save a fallback assistant message
+          await addMessageToChat(input.chatId, {
+            role: "assistant",
+            content: "I'm sorry, I encountered an error processing your request. Could you please try asking in a different way?",
+          });
+          
+          return {
+            success: false,
+            chatId: input.chatId,
+            response: "I'm sorry, I encountered an error processing your request. Could you please try asking in a different way?",
+            citations: [],
+          };
+        } catch (fallbackError) {
+          // If we can't even save a fallback message, just throw the error
+          throw new Error("Failed to send message to LLM");
+        }
       }
     }),
     

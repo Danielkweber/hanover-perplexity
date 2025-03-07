@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, use } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "~/trpc/react";
 
@@ -18,7 +18,9 @@ interface Message {
   searchQuery?: string;
 }
 
-export default function ChatPage({ params }: { params: { id: string } }) {
+export default function ChatPage({ params }: { params: Promise<{ id: string }> }) {
+  // Unwrap the params using React.use()
+  const unwrappedParams = use(params);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -46,20 +48,97 @@ export default function ChatPage({ params }: { params: { id: string } }) {
   }, []);
 
   // Get chat data
-  const { refetch: refetchChat } = api.chat.getChat.useQuery(
-    { id: params.id },
+  const { 
+    data: chatData, 
+    refetch: refetchChat,
+    error: chatError,
+    isSuccess,
+    isLoading: isChatLoading,
+    isFetching 
+  } = api.chat.getChat.useQuery(
+    { id: unwrappedParams.id },
     {
-      enabled: !!params.id,
-      onSuccess: (data) => {
-        setMessages(data.messages);
-        setIsInitializing(false);
+      enabled: !!unwrappedParams.id,
+      retry: 1,
+      refetchInterval: (data) => {
+        // If we have messages but the last one is a user message, keep polling
+        // This handles the case where we're waiting for the LLM to respond
+        if (data?.messages && data.messages.length > 0) {
+          const lastMessage = data.messages[data.messages.length - 1];
+          if (lastMessage.role === "user") {
+            return 2000; // Poll every 2 seconds
+          }
+        }
+        
+        // Also poll if title is still "New Chat" or hasn't been updated yet
+        if (data?.title === "New Chat") {
+          return 2000; // Poll every 2 seconds for title updates
+        }
+        
+        return false; // Stop polling once we have an assistant response and a proper title
       },
-      onError: (err) => {
-        setError(`Error loading chat: ${err.message}`);
-        setIsInitializing(false);
-      },
+      // Force refetch when this component mounts to ensure we have fresh data
+      refetchOnMount: true,
+      // Don't stale data for very long, we want to refetch often
+      staleTime: 1000,
+      // Refresh when window gets focus
+      refetchOnWindowFocus: true
     }
   );
+
+  // Use useEffect to handle loading state and data
+  useEffect(() => {
+    if (chatData) {
+      // Set messages from chatData
+      setMessages(chatData.messages);
+      
+      // Show loading indicator while the first message is processing
+      const hasAssistantResponse = chatData.messages.some(msg => msg.role === "assistant");
+      const hasUserMessageOnly = chatData.messages.length === 1 && chatData.messages[0].role === "user";
+      
+      if (hasAssistantResponse) {
+        // We have at least one assistant response, so we can show the chat
+        setIsInitializing(false);
+      } else if (hasUserMessageOnly && !isFetching) {
+        // We just have a single user message and we're not actively fetching,
+        // so we need to force a refetch to look for updates
+        void refetchChat();
+      } else if (!hasUserMessageOnly && !isChatLoading) {
+        // Non-standard state, but we're not loading, so show the chat
+        setIsInitializing(false);
+      }
+    }
+    
+    if (chatError) {
+      setError(`Error loading chat: ${chatError.message}`);
+      setIsInitializing(false);
+    }
+    
+    if (isSuccess && !chatData) {
+      setError("Could not load chat data");
+      setIsInitializing(false);
+    }
+  }, [chatData, chatError, isSuccess, isChatLoading, isFetching, refetchChat]);
+  
+  // Set up polling for title updates after initialization
+  useEffect(() => {
+    if (!isInitializing && chatData?.id) {
+      // Poll for updates every 2 seconds for up to 20 seconds (10 attempts)
+      let attempts = 0;
+      
+      const pollInterval = setInterval(async () => {
+        attempts++;
+        await refetchChat();
+        
+        // Stop polling after 10 attempts or if the user interacts with the chat
+        if (attempts >= 10 || messages.length > 1) {
+          clearInterval(pollInterval);
+        }
+      }, 2000);
+      
+      return () => clearInterval(pollInterval);
+    }
+  }, [isInitializing, chatData?.id, refetchChat, messages.length]);
 
   const chatMutation = api.chat.sendMessage.useMutation({
     onSuccess: (data) => {
@@ -103,7 +182,7 @@ export default function ChatPage({ params }: { params: { id: string } }) {
     // Send message and conversation history to API
     chatMutation.mutate({ 
       content: input,
-      chatId: params.id,
+      chatId: unwrappedParams.id,
       conversationHistory: conversationHistory 
     });
   };
@@ -115,32 +194,28 @@ export default function ChatPage({ params }: { params: { id: string } }) {
     }
   };
 
-  if (isInitializing) {
-    return (
-      <div className="flex flex-col h-screen max-w-4xl mx-auto items-center justify-center">
-        <div className="flex items-center space-x-2">
-          <div className="w-3 h-3 rounded-full bg-blue-500 animate-pulse"></div>
-          <div className="w-3 h-3 rounded-full bg-blue-500 animate-pulse delay-100"></div>
-          <div className="w-3 h-3 rounded-full bg-blue-500 animate-pulse delay-200"></div>
-        </div>
-        <p className="mt-4 text-gray-600">Loading conversation...</p>
-      </div>
-    );
-  }
+  // Create a loading indicator variable that shows when initializing or waiting for a message
+  const isShowingLoadingIndicator = isLoading || 
+                                   (isInitializing && chatData?.messages?.length > 0 && 
+                                    chatData.messages[chatData.messages.length - 1].role === "user");
+                                    
+  // Don't show the full page loading anymore, instead immediately render the chat UI
 
   return (
-    <div className="flex flex-col h-screen max-w-4xl mx-auto">
+    <div className="flex flex-col h-screen w-full">
       <header className="p-4 border-b bg-gradient-to-r from-blue-600 to-purple-600">
-        <h1 className="text-2xl font-bold text-white">Chat with Claude + Web Search</h1>
+        <h1 className="text-2xl font-bold text-white">
+          {chatData?.title || "Chat with Claude + Web Search"}
+        </h1>
       </header>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
         {messages.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center p-8 rounded-lg bg-white shadow-sm max-w-md">
-              <h2 className="text-xl font-semibold mb-2">Welcome to Claude with Search</h2>
+              <h2 className="text-xl font-semibold mb-2">This conversation is empty</h2>
               <p className="text-gray-600 mb-4">
-                Ask Claude anything and get helpful, up-to-date responses from the internet.
+                Start by asking Claude a question below.
               </p>
               <div className="grid grid-cols-1 gap-2 text-sm">
                 <button 
@@ -215,7 +290,7 @@ export default function ChatPage({ params }: { params: { id: string } }) {
                 )}
               </div>
             ))}
-            {isLoading && (
+            {isShowingLoadingIndicator && (
               <div className="p-4 rounded-lg bg-white shadow-sm border border-gray-100 max-w-3xl">
                 <div className="font-medium mb-1">Claude</div>
                 <div className="flex flex-col">

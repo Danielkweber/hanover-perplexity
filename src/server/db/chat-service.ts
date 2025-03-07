@@ -34,7 +34,7 @@ export interface Chat {
  */
 export async function createChat(chat: Chat): Promise<string> {
   // Insert the chat
-  const chatId = chat.id || uuidv4();
+  const chatId = chat.id ?? uuidv4();
   await db.insert(chats).values({
     id: chatId,
     title: chat.title,
@@ -46,7 +46,7 @@ export async function createChat(chat: Chat): Promise<string> {
       chat.messages.map((message, index) => {
         return addMessageToChat(chatId, {
           ...message,
-          orderIndex: message.orderIndex || index,
+          orderIndex: message.orderIndex ?? index,
         });
       })
     );
@@ -62,7 +62,7 @@ export async function addMessageToChat(
   chatId: string, 
   message: ChatMessage
 ): Promise<string> {
-  const messageId = message.id || uuidv4();
+  const messageId = message.id ?? uuidv4();
   let orderIndex = message.orderIndex;
   
   // If no orderIndex is provided, get the highest existing orderIndex and increment
@@ -171,9 +171,9 @@ export async function getChatById(chatId: string): Promise<Chat | null> {
     const citationList = citationsByMessageId.get(citation.messageId);
     if (citationList) {
       citationList.push({
-        title: citation.title || "",
+        title: citation.title ?? "",
         url: citation.url,
-        relevance: citation.relevance || undefined,
+        relevance: citation.relevance ?? undefined,
       });
     }
   });
@@ -190,8 +190,8 @@ export async function getChatById(chatId: string): Promise<Chat | null> {
       id: message.id,
       role: message.role as "user" | "assistant",
       content: message.content,
-      searchQuery: message.searchQuery || undefined,
-      citations: citationsByMessageId.get(message.id) || [],
+      searchQuery: message.searchQuery ?? undefined,
+      citations: citationsByMessageId.get(message.id) ?? [],
       orderIndex: message.orderIndex,
     })),
   };
@@ -213,7 +213,7 @@ export async function getAllChats(): Promise<{ id: string; title: string; update
   // Convert null updatedAt to current date if needed
   return results.map(chat => ({
     ...chat,
-    updatedAt: chat.updatedAt || new Date()
+    updatedAt: chat.updatedAt ?? new Date()
   }));
 }
 
@@ -234,11 +234,3 @@ export async function deleteChat(chatId: string): Promise<void> {
   await db.delete(chats).where(eq(chats.id, chatId));
 }
 
-// Helper for 'in' queries
-function citeIn(column: any, values: string[]) {
-  return {
-    operator: "in" as const,
-    column,
-    value: values,
-  };
-}

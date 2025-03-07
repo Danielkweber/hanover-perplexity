@@ -10,7 +10,7 @@ export default function ChatSidebar() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const promptParam = searchParams.get('prompt');
-  const [newChatPrompt, setNewChatPrompt] = useState(promptParam || "");
+  const [newChatPrompt, setNewChatPrompt] = useState(promptParam ?? "");
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -43,13 +43,16 @@ export default function ChatSidebar() {
       void refetch();
       
       // Set up periodic polling to catch title updates
-      const pollForTitle = async () => {
-        await refetch();
-        // Check if the title has updated from "New Chat"
-        const updatedChat = (await refetch()).data?.find(c => c.id === data.id);
-        if (updatedChat && updatedChat.title !== "New Chat") {
-          clearInterval(pollInterval);
-        }
+      const pollForTitle = () => {
+        void refetch().then(result => {
+          // Check if the title has updated from "New Chat"
+          if (result.data && data?.id) {
+            const updatedChat = result.data.find(c => c.id === data.id);
+            if (updatedChat && updatedChat.title !== "New Chat") {
+              clearInterval(pollInterval);
+            }
+          }
+        });
       };
       
       // Poll every second for title updates for a maximum of 15 seconds

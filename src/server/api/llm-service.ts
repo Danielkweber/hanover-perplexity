@@ -2,6 +2,14 @@ import { z } from "zod";
 import { callLLM } from "~/utils/llm";
 import { searchWeb } from "~/utils/search";
 
+// Define a more specific type for search results
+type SearchResult = {
+  title: string;
+  url: string;
+  content: string;
+  publishedDate?: string;
+};
+
 // Zod schema for LLM response validation
 export const CitationSchema = z.object({
   title: z.string(),
@@ -9,21 +17,19 @@ export const CitationSchema = z.object({
   relevance: z.string().optional(),
 });
 
+export type Citation = z.infer;
+
 export const LLMResponseSchema = z.object({
   answer: z.string(),
   citations: z.array(CitationSchema).min(0).max(5),
 });
 
+export type LLMResponse = z.infer;
+
 // System prompt for determining if a search is needed
 export const SEARCH_DECISION_PROMPT = `You are Claude, an AI assistant that can decide whether a user question requires up-to-date information from the web.
 
-Your task is to determine if the user's question:
-1. Requires recent or time-sensitive information (like current events, prices, weather, etc.)
-2. Asks about facts, statistics, or information that may have changed since your training
-3. References specific websites, documents, or sources you should look up
-4. Mentions events, products, or developments that occurred after your training data cutoff
-
-YOU SHOULD HAVE AN EXTREME BIAS FOR SEARCHING. YOU SHOULD ONLY NOT SEARCH IF THE EXISTING CONTEXT ALREADY HAS THE ANSWER PRESENT.
+ALWAYS SEARCH UNLESS THE NECESSARY INFO IS ALREADY PRESENT IN CONTEXT 
 Return ONLY "true" if a web search would be helpful, or "false" if you can answer reliably from your training.`;
 
 // System prompt for generating search queries
@@ -71,12 +77,18 @@ YOUR RESPONSE MUST STRICTLY FOLLOW THIS JSON FORMAT:
 
 DO NOT include any text outside the JSON structure.`;
 
+// Define a type for conversation history messages
+type ConversationMessage = {
+  role: string;
+  content: string;
+};
+
 /**
  * Determines if a search is needed for the given user query
  */
 export async function shouldSearchForQuery(
   query: string,
-  conversationHistory?: { role: string; content: string }[],
+  conversationHistory?: ConversationMessage[],
 ): Promise {
   let contextPrompt = `User's question: "${query}"`;
 
@@ -99,9 +111,7 @@ export async function shouldSearchForQuery(
   const decision = await callLLM(contextPrompt, SEARCH_DECISION_PROMPT);
 
   // Parse the response (should be "true" or "false")
-  const needsSearch = decision.toLowerCase().includes("true");
-
-  return needsSearch;
+  return decision.toLowerCase().includes("true");
 }
 
 /**
@@ -123,7 +133,7 @@ export async function generateSearchQuery(userQuestion: string): Promise {
 /**
  * Formats search results for Claude
  */
-export function formatSearchResults(searchResults: any[]): string {
+export function formatSearchResults(searchResults: SearchResult[]): string {
   return searchResults
     .map((result, index) => {
       return `[SEARCH RESULT ${index + 1}]
@@ -139,7 +149,7 @@ ${result.publishedDate ? `Published: ${result.publishedDate}` : ""}`;
  * Format conversation history for the LLM
  */
 export function formatConversationHistory(
-  conversationHistory?: { role: string; content: string }[],
+  conversationHistory?: ConversationMessage[],
 ): string {
   if (!conversationHistory || conversationHistory.length === 0) {
     return "";
@@ -162,8 +172,8 @@ export function formatConversationHistory(
  */
 export async function processQueryWithSearch(
   query: string,
-  searchResults: any[],
-  conversationHistory?: { role: string; content: string }[],
+  searchResults: SearchResult[],
+  conversationHistory?: ConversationMessage[],
 ): Promise {
   // Format the search results
   const formattedResults = formatSearchResults(searchResults);
@@ -198,7 +208,7 @@ IMPORTANT: Your response MUST be a valid JSON object with an "answer" field cont
       null,
       cleanedResponse,
     ];
-    const jsonContent = jsonMatch[1].trim();
+    const jsonContent = jsonMatch[1]?.trim() || cleanedResponse;
 
     // Parse and validate the JSON response
     const jsonResponse = JSON.parse(jsonContent);
@@ -211,7 +221,6 @@ IMPORTANT: Your response MUST be a valid JSON object with an "answer" field cont
     };
   } catch (parseError) {
     console.error("Error parsing LLM response as JSON:", parseError);
-    console.log("Raw LLM response:", llmResponse);
 
     // Try to extract a response even if JSON parsing failed
     let extractedAnswer = llmResponse;
@@ -236,7 +245,7 @@ IMPORTANT: Your response MUST be a valid JSON object with an "answer" field cont
  */
 export async function processQueryWithoutSearch(
   query: string,
-  conversationHistory?: { role: string; content: string }[],
+  conversationHistory?: ConversationMessage[],
 ): Promise {
   // Format conversation history
   const conversationContext = formatConversationHistory(conversationHistory);
@@ -262,7 +271,7 @@ Please answer the user's question based on your training data.`;
       null,
       cleanedResponse,
     ];
-    const jsonContent = jsonMatch[1].trim();
+    const jsonContent = jsonMatch[1]?.trim() || cleanedResponse;
 
     // Parse and validate the JSON response
     const jsonResponse = JSON.parse(jsonContent);
@@ -273,7 +282,6 @@ Please answer the user's question based on your training data.`;
     };
   } catch (parseError) {
     console.error("Error parsing fallback LLM response as JSON:", parseError);
-    console.log("Raw fallback LLM response:", llmResponse);
 
     // Try to extract a response even if JSON parsing failed
     let extractedAnswer = llmResponse;
@@ -309,7 +317,7 @@ export async function generateChatTitle(firstMessage: string): Promise {
  */
 export async function processUserMessage(
   message: string,
-  conversationHistory?: { role: string; content: string }[],
+  conversationHistory?: ConversationMessage[],
 ): Promise {
   try {
     // First determine if we need to search

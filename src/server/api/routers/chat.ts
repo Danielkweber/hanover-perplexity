@@ -220,6 +220,8 @@ export const chatRouter = createTRPCRouter({
     .input(z.object({ query: z.string() }))
     .query(async ({ input }) => {
       try {
+        // Import searchWeb directly to fix the undefined import issue
+        const { searchWeb } = await import("~/utils/search");
         const results = await searchWeb(input.query);
         return {
           success: true,

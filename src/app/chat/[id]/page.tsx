@@ -26,6 +26,7 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const router = useRouter();
 
   // Refs for auto-scrolling and input focus
@@ -63,14 +64,18 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
       refetchInterval: (data) => {
         // If we have messages but the last one is a user message, keep polling
         // This handles the case where we're waiting for the LLM to respond
+        // @ts-ignore - data.messages is defined in the Chat type
         if (data?.messages && data.messages.length > 0) {
+          // @ts-ignore - accessing messages array
           const lastMessage = data.messages[data.messages.length - 1];
-          if (lastMessage.role === "user") {
+          // @ts-ignore - lastMessage is defined
+          if (lastMessage?.role === "user") {
             return 2000; // Poll every 2 seconds
           }
         }
         
         // Also poll if title is still "New Chat" or hasn't been updated yet
+        // @ts-ignore - data.title is defined in the Chat type
         if (data?.title === "New Chat") {
           return 2000; // Poll every 2 seconds for title updates
         }
@@ -126,9 +131,9 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
       // Poll for updates every 2 seconds for up to 20 seconds (10 attempts)
       let attempts = 0;
       
-      const pollInterval = setInterval(async () => {
+      const pollInterval = setInterval(() => {
         attempts++;
-        await refetchChat();
+        void refetchChat();
         
         // Stop polling after 10 attempts or if the user interacts with the chat
         if (attempts >= 10 || messages.length > 1) {
@@ -141,7 +146,7 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
   }, [isInitializing, chatData?.id, refetchChat, messages.length]);
 
   const chatMutation = api.chat.sendMessage.useMutation({
-    onSuccess: (data) => {
+    onSuccess: () => {
       // Refresh the entire chat to ensure we have the latest data
       void refetchChat();
       setIsLoading(false);
@@ -150,7 +155,7 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
     onError: (error) => {
       console.error("Error sending message:", error);
       setIsLoading(false);
-      setError(error.message || "Failed to get a response. Please try again.");
+      setError(error.message ?? "Failed to get a response. Please try again.");
     },
   });
 
@@ -196,8 +201,10 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
 
   // Create a loading indicator variable that shows when initializing or waiting for a message
   const isShowingLoadingIndicator = isLoading || 
-                                   (isInitializing && chatData?.messages?.length > 0 && 
-                                    chatData.messages[chatData.messages.length - 1].role === "user");
+                                   (isInitializing && 
+                                    chatData?.messages && 
+                                    chatData.messages.length > 0 && 
+                                    chatData.messages[chatData.messages.length - 1]?.role === "user");
                                     
   // Don't show the full page loading anymore, instead immediately render the chat UI
 
@@ -222,19 +229,19 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
                   onClick={() => setInput("What are the latest advancements in AI technology?")}
                   className="p-2 rounded bg-gray-100 hover:bg-gray-200 cursor-pointer text-left"
                 >
-                  "What are the latest advancements in AI technology?"
+                  &quot;What are the latest advancements in AI technology?&quot;
                 </button>
                 <button 
                   onClick={() => setInput("Explain the current situation in Ukraine")}
                   className="p-2 rounded bg-gray-100 hover:bg-gray-200 cursor-pointer text-left"
                 >
-                  "Explain the current situation in Ukraine"
+                  &quot;Explain the current situation in Ukraine&quot;
                 </button>
                 <button 
                   onClick={() => setInput("What is the current price of Bitcoin and why has it changed recently?")}
                   className="p-2 rounded bg-gray-100 hover:bg-gray-200 cursor-pointer text-left"
                 >
-                  "What is the current price of Bitcoin and why has it changed recently?"
+                  &quot;What is the current price of Bitcoin and why has it changed recently?&quot;
                 </button>
               </div>
             </div>

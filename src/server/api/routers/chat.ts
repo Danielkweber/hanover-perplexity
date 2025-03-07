@@ -106,8 +106,20 @@ IMPORTANT: Your response MUST be a valid JSON object with an "answer" field cont
           const llmResponse = await callLLM(prompt, SYSTEM_PROMPT);
           
           try {
+            // Clean the response of any control characters and ensure it's valid JSON
+            const cleanedResponse = llmResponse
+              .replace(/[\u0000-\u0019]+/g, "") // Remove control characters
+              .replace(/\\n/g, " ")           // Replace escaped newlines with space
+              .replace(/\\"/g, '"')           // Handle escaped quotes properly
+              .trim();
+            
+            // Try to extract JSON if it's wrapped in markdown code blocks
+            const jsonMatch = cleanedResponse.match(/```(?:json)?([\s\S]*?)```/) || 
+                             [null, cleanedResponse];
+            const jsonContent = jsonMatch[1].trim();
+            
             // Parse and validate the JSON response
-            const jsonResponse = JSON.parse(llmResponse);
+            const jsonResponse = JSON.parse(jsonContent);
             const validatedResponse = LLMResponseSchema.parse(jsonResponse);
             
             return {
@@ -120,11 +132,23 @@ IMPORTANT: Your response MUST be a valid JSON object with an "answer" field cont
             console.error("Error parsing LLM response as JSON:", parseError);
             console.log("Raw LLM response:", llmResponse);
             
-            // Fallback: Return the raw response without citations
+            // Try to extract a response even if JSON parsing failed
+            let extractedAnswer = llmResponse;
+            let extractedCitations = [];
+            
+            // Try to extract answer text if it looks like JSON but couldn't be parsed
+            const answerMatch = llmResponse.match(/"answer"\s*:\s*"([^"]*)"/);
+            if (answerMatch && answerMatch[1]) {
+              extractedAnswer = answerMatch[1]
+                .replace(/\\n/g, "\n")
+                .replace(/\\"/g, '"');
+            }
+            
+            // Fallback: Return the extracted answer without citations
             return {
               success: true,
-              response: `${llmResponse}\n\n(Note: I encountered an issue with formatting my response properly. The information is still accurate.)`,
-              citations: [],
+              response: extractedAnswer,
+              citations: extractedCitations,
               searchQuery,
             };
           }
@@ -158,8 +182,20 @@ Please answer the user's question based on your training data.`;
           const llmResponse = await callLLM(fallbackPrompt, fallbackSystemPrompt);
           
           try {
+            // Clean the response of any control characters and ensure it's valid JSON
+            const cleanedResponse = llmResponse
+              .replace(/[\u0000-\u0019]+/g, "") // Remove control characters
+              .replace(/\\n/g, " ")           // Replace escaped newlines with space
+              .replace(/\\"/g, '"')           // Handle escaped quotes properly
+              .trim();
+            
+            // Try to extract JSON if it's wrapped in markdown code blocks
+            const jsonMatch = cleanedResponse.match(/```(?:json)?([\s\S]*?)```/) || 
+                             [null, cleanedResponse];
+            const jsonContent = jsonMatch[1].trim();
+            
             // Parse and validate the JSON response
-            const jsonResponse = JSON.parse(llmResponse);
+            const jsonResponse = JSON.parse(jsonContent);
             const validatedResponse = LLMResponseSchema.parse(jsonResponse);
             
             return {
@@ -169,11 +205,23 @@ Please answer the user's question based on your training data.`;
             };
           } catch (parseError) {
             console.error("Error parsing fallback LLM response as JSON:", parseError);
+            console.log("Raw fallback LLM response:", llmResponse);
             
-            // Return raw response as fallback
+            // Try to extract a response even if JSON parsing failed
+            let extractedAnswer = llmResponse;
+            
+            // Try to extract answer text if it looks like JSON but couldn't be parsed
+            const answerMatch = llmResponse.match(/"answer"\s*:\s*"([^"]*)"/);
+            if (answerMatch && answerMatch[1]) {
+              extractedAnswer = answerMatch[1]
+                .replace(/\\n/g, "\n")
+                .replace(/\\"/g, '"');
+            }
+            
+            // Return the extracted answer without citations
             return {
               success: true,
-              response: llmResponse,
+              response: extractedAnswer,
               citations: [],
             };
           }

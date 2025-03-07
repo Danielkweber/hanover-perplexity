@@ -88,35 +88,35 @@ export default function ChatPage() {
   return (
     <div className="flex flex-col h-screen max-w-4xl mx-auto">
       <header className="p-4 border-b bg-gradient-to-r from-blue-600 to-purple-600">
-        <h1 className="text-2xl font-bold text-white">Chat with Claude</h1>
+        <h1 className="text-2xl font-bold text-white">Chat with Claude + Web Search</h1>
       </header>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
         {messages.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center p-8 rounded-lg bg-white shadow-sm max-w-md">
-              <h2 className="text-xl font-semibold mb-2">Welcome to Claude Chat</h2>
+              <h2 className="text-xl font-semibold mb-2">Welcome to Claude with Search</h2>
               <p className="text-gray-600 mb-4">
-                Ask Claude anything and get helpful, informative responses.
+                Ask Claude anything and get helpful, up-to-date responses from the internet.
               </p>
               <div className="grid grid-cols-1 gap-2 text-sm">
                 <button 
-                  onClick={() => setInput("Explain quantum computing in simple terms")}
+                  onClick={() => setInput("What are the latest advancements in AI technology?")}
                   className="p-2 rounded bg-gray-100 hover:bg-gray-200 cursor-pointer text-left"
                 >
-                  "Explain quantum computing in simple terms"
+                  "What are the latest advancements in AI technology?"
                 </button>
                 <button 
-                  onClick={() => setInput("Write a short poem about a sunset")}
+                  onClick={() => setInput("Explain the current situation in Ukraine")}
                   className="p-2 rounded bg-gray-100 hover:bg-gray-200 cursor-pointer text-left"
                 >
-                  "Write a short poem about a sunset"
+                  "Explain the current situation in Ukraine"
                 </button>
                 <button 
-                  onClick={() => setInput("What are the benefits of regular exercise?")}
+                  onClick={() => setInput("What is the current price of Bitcoin and why has it changed recently?")}
                   className="p-2 rounded bg-gray-100 hover:bg-gray-200 cursor-pointer text-left"
                 >
-                  "What are the benefits of regular exercise?"
+                  "What is the current price of Bitcoin and why has it changed recently?"
                 </button>
               </div>
             </div>
@@ -141,10 +141,13 @@ export default function ChatPage() {
             {isLoading && (
               <div className="p-4 rounded-lg bg-white shadow-sm border border-gray-100 max-w-3xl">
                 <div className="font-medium mb-1">Claude</div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-2 h-2 rounded-full bg-gray-400 animate-pulse"></div>
-                  <div className="w-2 h-2 rounded-full bg-gray-400 animate-pulse delay-100"></div>
-                  <div className="w-2 h-2 rounded-full bg-gray-400 animate-pulse delay-200"></div>
+                <div className="flex flex-col">
+                  <div className="flex items-center space-x-2 mb-2">
+                    <div className="w-2 h-2 rounded-full bg-gray-400 animate-pulse"></div>
+                    <div className="w-2 h-2 rounded-full bg-gray-400 animate-pulse delay-100"></div>
+                    <div className="w-2 h-2 rounded-full bg-gray-400 animate-pulse delay-200"></div>
+                  </div>
+                  <p className="text-sm text-gray-500">Searching the web for information...</p>
                 </div>
               </div>
             )}

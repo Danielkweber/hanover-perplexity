@@ -20,9 +20,9 @@ export default async function Home() {
               className="flex max-w-xs flex-col gap-4 rounded-xl bg-white/10 p-4 hover:bg-white/20"
               href="/chat"
             >
-              <h3 className="text-2xl font-bold">Chat with AI →</h3>
+              <h3 className="text-2xl font-bold">Chat with Claude AI + Web Search →</h3>
               <div className="text-lg">
-                Try out our AI chat interface powered by Anthropic's Claude.
+                Ask Claude anything and get helpful, up-to-date answers with sources from the internet.
               </div>
             </Link>
             <Link

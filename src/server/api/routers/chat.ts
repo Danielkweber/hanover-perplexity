@@ -42,9 +42,18 @@ The "citations" array must contain 2-3 of the most relevant sources that directl
 DO NOT include any text outside the JSON structure.
 DO NOT format the JSON with markdown code blocks.`;
 
+// Type for conversation history messages
+const ConversationMessageSchema = z.object({
+  role: z.enum(["user", "assistant"]),
+  content: z.string(),
+});
+
 export const chatRouter = createTRPCRouter({
   sendMessage: publicProcedure
-    .input(z.object({ content: z.string() }))
+    .input(z.object({ 
+      content: z.string(),
+      conversationHistory: z.array(ConversationMessageSchema).optional()
+    }))
     .mutation(async ({ input }) => {
       try {
         try {
@@ -73,14 +82,23 @@ Content: ${result.content.substring(0, 800)}${result.content.length > 800 ? '...
 ${result.publishedDate ? `Published: ${result.publishedDate}` : ''}`;
           }).join('\n\n');
           
+          // Format conversation history if available
+          let conversationContext = "";
+          if (input.conversationHistory && input.conversationHistory.length > 0) {
+            conversationContext = "Previous conversation:\n" + 
+              input.conversationHistory.map(msg => 
+                `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`
+              ).join("\n\n") + "\n\n";
+          }
+
           // Prepare the full context for Claude
-          const prompt = `User question: "${input.content}"
+          const prompt = `${conversationContext}User's current question: "${input.content}"
 
 Here are search results that may help answer this question:
 
 ${formattedResults}
 
-Please answer the user's question based on these search results. 
+Please answer the user's latest question based on these search results and the conversation history (if any).
 
 IMPORTANT: Your response MUST be a valid JSON object with an "answer" field containing your response and a "citations" array with 2-3 relevant sources. Follow the exact JSON format specified in your instructions.`;
           
@@ -113,6 +131,15 @@ IMPORTANT: Your response MUST be a valid JSON object with an "answer" field cont
         } catch (searchError) {
           console.error("Error during search:", searchError);
           
+          // Format conversation history for fallback
+          let conversationContext = "";
+          if (input.conversationHistory && input.conversationHistory.length > 0) {
+            conversationContext = "Previous conversation:\n" + 
+              input.conversationHistory.map(msg => 
+                `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`
+              ).join("\n\n") + "\n\n";
+          }
+
           // Fallback to regular response without search
           const fallbackSystemPrompt = `You are Claude, an AI assistant. Web search is currently unavailable.
           
@@ -124,7 +151,11 @@ YOUR RESPONSE MUST STRICTLY FOLLOW THIS JSON FORMAT:
 
 DO NOT include any text outside the JSON structure.`;
 
-          const llmResponse = await callLLM(input.content, fallbackSystemPrompt);
+          const fallbackPrompt = `${conversationContext}User's question: "${input.content}"
+          
+Please answer the user's question based on your training data.`;
+
+          const llmResponse = await callLLM(fallbackPrompt, fallbackSystemPrompt);
           
           try {
             // Parse and validate the JSON response

@@ -84,8 +84,17 @@ export default function ChatPage() {
     // Focus the input field again
     inputRef.current?.focus();
     
-    // Send message to API
-    chatMutation.mutate({ content: input });
+    // Format conversation history for the API
+    const conversationHistory = messages.map(msg => ({
+      role: msg.role,
+      content: msg.content
+    }));
+    
+    // Send message and conversation history to API
+    chatMutation.mutate({ 
+      content: input,
+      conversationHistory: conversationHistory 
+    });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
